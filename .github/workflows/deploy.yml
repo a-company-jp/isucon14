@@ -14,10 +14,10 @@ jobs:
           go mod download
           go build .
           sudo systemctl restart isuride-go.service
-      - name: Exec migrate
-        run: |
-          cd /home/isucon/webapp/sql
-          make up
+#       - name: Exec migrate
+#         run: |
+#           cd /home/isucon/webapp/sql
+#           make up
       - name: Check status
         run: |
           systemctl is-active --quiet isu-go
