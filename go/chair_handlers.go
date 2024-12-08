@@ -85,7 +85,7 @@ func chairPostActivity(w http.ResponseWriter, r *http.Request) {
 
 	_, err := db.ExecContext(ctx, "UPDATE chairs SET is_active = ? WHERE id = ?", req.IsActive, chair.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to update chair: %w", err))
 		return
 	}
 
@@ -108,7 +108,7 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 
 	tx, err := db.Beginx()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to begin transaction: %w", err))
 		return
 	}
 	defer tx.Rollback()
@@ -117,7 +117,7 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 	var lastLatitude, lastLongitude int
 	err = tx.GetContext(ctx, &lastLatitude, `SELECT latitude FROM chair_locations WHERE chair_id = ? ORDER BY created_at DESC LIMIT 1`, chair.ID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to get last latitude: %w", err))
 		return
 	}
 
@@ -127,7 +127,7 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 		`INSERT INTO chair_locations (id, chair_id, latitude, longitude) VALUES (?, ?, ?, ?)`,
 		chairLocationID, chair.ID, req.Latitude, req.Longitude,
 	); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to insert chair location: %w", err))
 		return
 	}
 
@@ -154,7 +154,7 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 	} else {
 		status, err := getLatestRideStatus(ctx, tx, ride.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to get latest ride status: %w", err))
 			return
 		}
 		if status != "COMPLETED" && status != "CANCELED" {

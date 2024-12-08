@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -47,7 +48,7 @@ func ownerPostOwners(w http.ResponseWriter, r *http.Request) {
 		ownerID, req.Name, accessToken, chairRegisterToken,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to insert owner: %w", err))
 		return
 	}
 
@@ -105,7 +106,7 @@ func ownerGetSales(w http.ResponseWriter, r *http.Request) {
 
 	chairs := []Chair{}
 	if err := db.SelectContext(ctx, &chairs, "SELECT * FROM chairs WHERE owner_id = ?", owner.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to get chairs: %w", err))
 		return
 	}
 
@@ -130,7 +131,7 @@ func ownerGetSales(w http.ResponseWriter, r *http.Request) {
 	`
 	query, args, err := sqlx.In(query, initialFare, farePerDistance, chairIDs, since, until)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to create query: %w", err))
 		return
 	}
 	query = db.Rebind(query)

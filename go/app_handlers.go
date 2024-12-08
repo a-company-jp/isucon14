@@ -67,7 +67,7 @@ func appPostUsers(w http.ResponseWriter, r *http.Request) {
 		userID, "CP_NEW2024", 3000,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to insert coupon: %w", err))
 		return
 	}
 
@@ -77,7 +77,7 @@ func appPostUsers(w http.ResponseWriter, r *http.Request) {
 		var coupons []Coupon
 		err = tx.SelectContext(ctx, &coupons, "SELECT * FROM coupons WHERE code = ? FOR UPDATE", "INV_"+*req.InvitationCode)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to select coupon: %w", err))
 			return
 		}
 		if len(coupons) >= 3 {
@@ -93,7 +93,7 @@ func appPostUsers(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusBadRequest, errors.New("この招待コードは使用できません。"))
 				return
 			}
-			writeError(w, http.StatusInternalServerError, err)
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to select user: %w", err))
 			return
 		}
 
@@ -104,7 +104,7 @@ func appPostUsers(w http.ResponseWriter, r *http.Request) {
 			userID, "INV_"+*req.InvitationCode, 1500,
 		)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to insert coupon: %w", err))
 			return
 		}
 		// 招待した人にもRewardを付与
@@ -114,13 +114,13 @@ func appPostUsers(w http.ResponseWriter, r *http.Request) {
 			inviter.ID, "RWD_"+*req.InvitationCode, 1000,
 		)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to insert coupon: %w", err))
 			return
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to commit transaction: %w", err))
 		return
 	}
 
@@ -161,7 +161,7 @@ func appPostPaymentMethods(w http.ResponseWriter, r *http.Request) {
 		req.Token,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to insert payment token: %w", err))
 		return
 	}
 
@@ -196,7 +196,7 @@ func appGetRides(w http.ResponseWriter, r *http.Request) {
 
 	tx, err := db.Beginx()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to begin transaction: %w", err))
 		return
 	}
 	defer tx.Rollback()
@@ -230,7 +230,7 @@ func appGetRides(w http.ResponseWriter, r *http.Request) {
 	// 3. 最新のライドステータスを一括で取得
 	latestStatuses, err := getLatestRideStatuses(ctx, tx, rideIDs)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to get latest ride statuses: %w", err))
 		return
 	}
 
