@@ -194,9 +194,16 @@ func appGetRides(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := ctx.Value("user").(*User)
 
+	tx, err := db.Beginx()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer tx.Rollback()
+
 	// 1. ユーザーの全ライドを取得
 	rides := []Ride{}
-	if err := db.SelectContext(
+	if err := tx.SelectContext(
 		ctx,
 		&rides,
 		`SELECT * FROM rides WHERE user_id = ? ORDER BY created_at DESC`,
@@ -221,7 +228,7 @@ func appGetRides(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. 最新のライドステータスを一括で取得
-	latestStatuses, err := getLatestRideStatuses(ctx, db, rideIDs)
+	latestStatuses, err := getLatestRideStatuses(ctx, tx, rideIDs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -262,8 +269,8 @@ func appGetRides(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		query = db.Rebind(query)
-		if err := db.SelectContext(ctx, &chairs, query, args...); err != nil {
+		query = tx.Rebind(query)
+		if err := tx.SelectContext(ctx, &chairs, query, args...); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -289,8 +296,8 @@ func appGetRides(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		query = db.Rebind(query)
-		if err := db.SelectContext(ctx, &owners, query, args...); err != nil {
+		query = tx.Rebind(query)
+		if err := tx.SelectContext(ctx, &owners, query, args...); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -305,7 +312,7 @@ func appGetRides(w http.ResponseWriter, r *http.Request) {
 	// 9. レスポンス用のアイテムを作成
 	items := make([]getAppRidesResponseItem, 0, len(completedRides))
 	for _, ride := range completedRides {
-		fare, err := calculateDiscountedFare(ctx, db, user.ID, &ride, ride.PickupLatitude, ride.PickupLongitude, ride.DestinationLatitude, ride.DestinationLongitude)
+		fare, err := calculateDiscountedFare(ctx, tx, user.ID, &ride, ride.PickupLatitude, ride.PickupLongitude, ride.DestinationLatitude, ride.DestinationLongitude)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -340,13 +347,18 @@ func appGetRides(w http.ResponseWriter, r *http.Request) {
 		items = append(items, item)
 	}
 
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
 	writeJSON(w, http.StatusOK, &getAppRidesResponse{
 		Rides: items,
 	})
 }
 
 // getLatestRideStatuses は複数のライドIDに対する最新のステータスを取得する関数です。
-func getLatestRideStatuses(ctx context.Context, db *sqlx.DB, rideIDs []string) (map[string]string, error) {
+func getLatestRideStatuses(ctx context.Context, tx *sqlx.Tx, rideIDs []string) (map[string]string, error) {
 	// サブクエリで各ライドの最新のcreated_atを取得し、それを基に最新のステータスを取得
 	query := `
         SELECT rs1.ride_id, rs1.status
@@ -365,7 +377,7 @@ func getLatestRideStatuses(ctx context.Context, db *sqlx.DB, rideIDs []string) (
 		return nil, err
 	}
 	// Rebind is necessary for different SQL dialects
-	query = db.Rebind(query)
+	query = tx.Rebind(query)
 
 	type RideStatusResult struct {
 		RideID string `db:"ride_id"`
@@ -373,7 +385,7 @@ func getLatestRideStatuses(ctx context.Context, db *sqlx.DB, rideIDs []string) (
 	}
 
 	results := []RideStatusResult{}
-	if err := db.SelectContext(ctx, &results, query, args...); err != nil {
+	if err := tx.SelectContext(ctx, &results, query, args...); err != nil {
 		return nil, err
 	}
 
