@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -100,34 +101,59 @@ func ownerGetSales(w http.ResponseWriter, r *http.Request) {
 		until = time.UnixMilli(parsed)
 	}
 
-	owner := r.Context().Value("owner").(*Owner)
+	owner := ctx.Value("owner").(*Owner)
 
-	tx, err := db.Beginx()
+	chairs := []Chair{}
+	if err := db.SelectContext(ctx, &chairs, "SELECT * FROM chairs WHERE owner_id = ?", owner.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	chairIDs := []string{}
+	for _, chair := range chairs {
+		chairIDs = append(chairIDs, chair.ID)
+	}
+
+	type rideSales struct {
+		ChairID string `db:"chair_id"`
+		Sales   int    `db:"sales"`
+	}
+
+	rideSalesData := []rideSales{}
+	query := `
+		SELECT rides.chair_id,
+		       SUM(?) + SUM(ABS(rides.pickup_latitude - rides.destination_latitude) + ABS(rides.pickup_longitude - rides.destination_longitude) * ?) AS sales
+		FROM rides
+		JOIN ride_statuses ON rides.id = ride_statuses.ride_id
+		WHERE rides.chair_id IN (?) AND ride_statuses.status = 'COMPLETED' AND ride_statuses.updated_at BETWEEN ? AND ?
+		GROUP BY rides.chair_id
+	`
+	query, args, err := sqlx.In(query, initialFare, farePerDistance, chairIDs, since, until)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	defer tx.Rollback()
+	query = db.Rebind(query)
 
-	chairs := []Chair{}
-	if err := tx.SelectContext(ctx, &chairs, "SELECT * FROM chairs WHERE owner_id = ?", owner.ID); err != nil {
+	if err := db.SelectContext(ctx, &rideSalesData, query, args...); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 
+	// 売上データをマッピング
+	chairSalesMap := make(map[string]int)
+	for _, data := range rideSalesData {
+		chairSalesMap[data.ChairID] = data.Sales
+	}
+
+	// レスポンス構造体を作成
 	res := ownerGetSalesResponse{
 		TotalSales: 0,
 	}
 
 	modelSalesByModel := map[string]int{}
 	for _, chair := range chairs {
-		rides := []Ride{}
-		if err := tx.SelectContext(ctx, &rides, "SELECT rides.* FROM rides JOIN ride_statuses ON rides.id = ride_statuses.ride_id WHERE chair_id = ? AND status = 'COMPLETED' AND updated_at BETWEEN ? AND ? + INTERVAL 999 MICROSECOND", chair.ID, since, until); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-
-		sales := sumSales(rides)
+		sales := chairSalesMap[chair.ID]
 		res.TotalSales += sales
 
 		res.Chairs = append(res.Chairs, chairSales{
@@ -139,15 +165,15 @@ func ownerGetSales(w http.ResponseWriter, r *http.Request) {
 		modelSalesByModel[chair.Model] += sales
 	}
 
-	models := []modelSales{}
+	// モデル別売上を作成
 	for model, sales := range modelSalesByModel {
-		models = append(models, modelSales{
+		res.Models = append(res.Models, modelSales{
 			Model: model,
 			Sales: sales,
 		})
 	}
-	res.Models = models
 
+	// レスポンスを返却
 	writeJSON(w, http.StatusOK, res)
 }
 
