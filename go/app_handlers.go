@@ -1092,32 +1092,96 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
+	// Fetch all active chairs
 	chairs := []Chair{}
 	err = tx.SelectContext(
 		ctx,
 		&chairs,
-		`SELECT * FROM chairs`,
+		`SELECT * FROM chairs WHERE is_active = TRUE`,
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 
+	// Collect chair IDs for batch querying rides and locations
+	chairIDs := []string{}
+	for _, chair := range chairs {
+		chairIDs = append(chairIDs, chair.ID) // Chair ID is a string now
+	}
+
+	// Fetch all rides for the collected chair IDs
+	rides := []*Ride{}
+	query, args, err := sqlx.In(
+		`SELECT * FROM rides WHERE chair_id IN (?) ORDER BY created_at DESC`,
+		chairIDs,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	// Rebind for the proper SQL placeholder format
+	query = tx.Rebind(query)
+
+	err = tx.SelectContext(
+		ctx,
+		&rides,
+		query,
+		args...,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	// Map rides by chair ID (now as a string)
+	chairRides := make(map[string][]*Ride)
+	for _, ride := range rides {
+		if ride.ChairID.Valid {
+			chairID := ride.ChairID.String
+			chairRides[chairID] = append(chairRides[chairID], ride)
+		}
+	}
+
+	// Fetch the latest chair locations for the collected chair IDs
+	chairLocations := []*ChairLocation{}
+	query, args, err = sqlx.In(
+		`SELECT * FROM chair_locations WHERE chair_id IN (?) ORDER BY created_at DESC`,
+		chairIDs,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	// Rebind for the proper SQL placeholder format
+	query = tx.Rebind(query)
+
+	err = tx.SelectContext(
+		ctx,
+		&chairLocations,
+		query,
+		args...,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	// Map locations by chair ID (as a string)
+	chairLocationsMap := make(map[string]*ChairLocation)
+	for _, location := range chairLocations {
+		chairLocationsMap[location.ChairID] = location
+	}
+
+	// Filter and process nearby chairs
 	nearbyChairs := []appGetNearbyChairsResponseChair{}
 	for _, chair := range chairs {
-		if !chair.IsActive {
-			continue
-		}
-
-		rides := []*Ride{}
-		if err := tx.SelectContext(ctx, &rides, `SELECT * FROM rides WHERE chair_id = ? ORDER BY created_at DESC`, chair.ID); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-
+		// Skip chairs that have uncompleted rides
+		ridesForChair := chairRides[chair.ID]
 		skip := false
-		for _, ride := range rides {
-			// 過去にライドが存在し、かつ、それが完了していない場合はスキップ
+		for _, ride := range ridesForChair {
 			status, err := getLatestRideStatus(ctx, tx, ride.ID)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, err)
@@ -1132,35 +1196,25 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// 最新の位置情報を取得
-		chairLocation := &ChairLocation{}
-		err = tx.GetContext(
-			ctx,
-			chairLocation,
-			`SELECT * FROM chair_locations WHERE chair_id = ? ORDER BY created_at DESC LIMIT 1`,
-			chair.ID,
-		)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				continue
-			}
-			writeError(w, http.StatusInternalServerError, err)
-			return
+		// Get the latest location for the chair
+		chairLocation, exists := chairLocationsMap[chair.ID]
+		if !exists || calculateDistance(coordinate.Latitude, coordinate.Longitude, chairLocation.Latitude, chairLocation.Longitude) > distance {
+			continue
 		}
 
-		if calculateDistance(coordinate.Latitude, coordinate.Longitude, chairLocation.Latitude, chairLocation.Longitude) <= distance {
-			nearbyChairs = append(nearbyChairs, appGetNearbyChairsResponseChair{
-				ID:    chair.ID,
-				Name:  chair.Name,
-				Model: chair.Model,
-				CurrentCoordinate: Coordinate{
-					Latitude:  chairLocation.Latitude,
-					Longitude: chairLocation.Longitude,
-				},
-			})
-		}
+		// Append the chair to the response
+		nearbyChairs = append(nearbyChairs, appGetNearbyChairsResponseChair{
+			ID:    chair.ID,
+			Name:  chair.Name,
+			Model: chair.Model,
+			CurrentCoordinate: Coordinate{
+				Latitude:  chairLocation.Latitude,
+				Longitude: chairLocation.Longitude,
+			},
+		})
 	}
 
+	// Get the current timestamp
 	retrievedAt := &time.Time{}
 	err = tx.GetContext(
 		ctx,
