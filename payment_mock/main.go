@@ -7,11 +7,14 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
 
 var (
-	data     = map[string][]int{}
-	dataLock sync.Mutex
+	data          = map[string][]int{}
+	dataLock      sync.Mutex
+	responseCache = make(map[string][]ResponsePayment)
+	client        = &http.Client{Timeout: 10 * time.Second}
 )
 
 func main() {
@@ -28,30 +31,32 @@ type PostPaymentsRequest struct {
 func handlePostPayments(w http.ResponseWriter, r *http.Request) {
 	token, err := getTokenFromAuthorizationHeader(r)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	var req PostPaymentsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "不正なリクエスト形式です"})
+		writeError(w, http.StatusBadRequest, "不正なリクエスト形式です")
 		return
 	}
 
-	if req.Amount <= 0 && req.Amount > 1_000_000 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "決済額が不正です"})
+	if req.Amount <= 0 || req.Amount > 1_000_000 {
+		writeError(w, http.StatusBadRequest, "決済額が不正です")
 		return
 	}
 
-	// モックサーバーは任意のトークンを受け付けて、決済を記録する
+	// ロック範囲を縮小
 	dataLock.Lock()
 	arr, ok := data[token]
 	if !ok {
 		arr = []int{}
 		data[token] = arr
 	}
-	arr = append(arr, req.Amount)
 	dataLock.Unlock()
+
+	// ここで配列を更新
+	arr = append(arr, req.Amount)
 
 	slog.Info("決済完了", slog.String("token", token), slog.Int("amount", req.Amount))
 	w.WriteHeader(http.StatusNoContent)
@@ -65,10 +70,17 @@ type ResponsePayment struct {
 func handleGetPayments(w http.ResponseWriter, r *http.Request) {
 	token, err := getTokenFromAuthorizationHeader(r)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
+	// キャッシュを確認
+	if cachedResponse, exists := responseCache[token]; exists {
+		writeJSON(w, http.StatusOK, cachedResponse)
+		return
+	}
+
+	// データをロックして取得
 	dataLock.Lock()
 	arr, _ := data[token]
 	dataLock.Unlock()
@@ -80,6 +92,9 @@ func handleGetPayments(w http.ResponseWriter, r *http.Request) {
 			Status: "成功",
 		})
 	}
+
+	responseCache[token] = res
+
 	writeJSON(w, http.StatusOK, res)
 }
 
@@ -97,4 +112,8 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		slog.Error(err.Error())
 	}
+}
+
+func writeError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]string{"message": message})
 }
