@@ -10,13 +10,6 @@ import (
 func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	tx, err := db.Beginx()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	defer tx.Rollback()
-
 	ride := &Ride{}
 	if err := db.GetContext(ctx, ride, `SELECT * FROM rides WHERE chair_id IS NULL ORDER BY created_at LIMIT 1 FOR UPDATE`); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -45,7 +38,7 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
     `
 
 	matched := &Chair{}
-	if err := tx.GetContext(ctx, matched, query, ride.PickupLatitude, ride.PickupLongitude); err != nil {
+	if err := db.GetContext(ctx, matched, query, ride.PickupLatitude, ride.PickupLongitude); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -54,13 +47,7 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := tx.ExecContext(ctx, "UPDATE rides SET chair_id = ? WHERE id = ?", matched.ID, ride.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-
-	// トランザクションをコミット
-	if err := tx.Commit(); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE rides SET chair_id = ? WHERE id = ?", matched.ID, ride.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
