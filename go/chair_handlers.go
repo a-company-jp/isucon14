@@ -2,9 +2,11 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/oklog/ulid/v2"
 )
@@ -188,12 +190,27 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	chair := ctx.Value("chair").(*Chair)
 
+	// SSE用のヘッダー設定
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Transfer-Encoding", "chunked")
+
+	// SSEの接続がクローズされた場合の処理
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, errors.New("failed to cast response writer"))
+		return
+	}
+
 	tx, err := db.Beginx()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	defer tx.Rollback()
+
+	// 最新のライドを取得
 	ride := &Ride{}
 	yetSentRideStatus := RideStatus{}
 	status := ""
@@ -209,6 +226,7 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ライドの状態を取得
 	if err := tx.GetContext(ctx, &yetSentRideStatus, `SELECT * FROM ride_statuses WHERE ride_id = ? AND chair_sent_at IS NULL ORDER BY created_at ASC LIMIT 1`, ride.ID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			status, err = getLatestRideStatus(ctx, tx, ride.ID)
@@ -224,6 +242,7 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 		status = yetSentRideStatus.Status
 	}
 
+	// ユーザー情報を取得
 	user := &User{}
 	err = tx.GetContext(ctx, user, "SELECT * FROM users WHERE id = ? FOR SHARE", ride.UserID)
 	if err != nil {
@@ -231,20 +250,8 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if yetSentRideStatus.ID != "" {
-		_, err := tx.ExecContext(ctx, `UPDATE ride_statuses SET chair_sent_at = CURRENT_TIMESTAMP(6) WHERE id = ?`, yetSentRideStatus.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-
-	writeJSON(w, http.StatusOK, &chairGetNotificationResponse{
+	// 初回の通知
+	response := &chairGetNotificationResponse{
 		Data: &chairGetNotificationResponseData{
 			RideID: ride.ID,
 			User: simpleUser{
@@ -262,7 +269,48 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 			Status: status,
 		},
 		RetryAfterMs: 30,
-	})
+	}
+
+	// 初回通知を送信
+	sendChairSSEMessage(w, response)
+	flusher.Flush() // 最初の通知後にフラッシュ
+
+	// ライド状態の変化を監視
+	// 定期的にライドの状態をチェックして、変更があれば通知する
+	go func() {
+		ticker := time.NewTicker(30 * time.Second) // 定期的にチェック
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				// 状態が変わった場合のみ通知
+				updatedStatus, err := getLatestRideStatus(ctx, tx, ride.ID)
+				if err != nil {
+					writeError(w, http.StatusInternalServerError, err)
+					return
+				}
+
+				if updatedStatus != status {
+					// 新しい状態を通知
+					status = updatedStatus
+
+					// レスポンスに状態を更新して通知
+					response.Data.Status = status
+					sendChairSSEMessage(w, response)
+					flusher.Flush() // 通知後にフラッシュ
+				}
+			case <-r.Context().Done(): // 接続終了時
+				return
+			}
+		}
+	}()
+
+	// 最後にトランザクションのコミット
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 }
 
 type postChairRidesRideIDStatusRequest struct {
@@ -335,4 +383,17 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// sendChairSSEMessageは、椅子向けSSEメッセージを送信します
+func sendChairSSEMessage(w http.ResponseWriter, response *chairGetNotificationResponse) {
+	// SSEメッセージを送信
+	jsonData, err := json.Marshal(response)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	// SSEフォーマットで送信
+	fmt.Fprintf(w, "data: %s\n\n", jsonData)
 }
