@@ -3,7 +3,6 @@ package main
 import (
 	"database/sql"
 	"errors"
-	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -222,23 +221,22 @@ func ownerGetChairs(w http.ResponseWriter, r *http.Request) {
 	owner := ctx.Value("owner").(*Owner)
 
 	chairs := []chairWithDetail{}
-	query := `SELECT
-            c.id,
-            c.owner_id,
-            c.name,
-            c.access_token,
-            c.model,
-            c.is_active,
-            c.created_at,
-            c.updated_at,
-            c.total_distance,
-            c.total_distance_updated_at
-        FROM chairs c
-        WHERE c.owner_id = ?
-   `
-	if err := db.SelectContext(ctx, &chairs, query, owner.ID); err != nil {
+	if err := db.SelectContext(ctx, &chairs, `
+        SELECT
+            id,
+            owner_id,
+            name,
+            access_token,
+            model,
+            is_active,
+            created_at,
+            updated_at,
+            total_distance,
+            total_distance_updated_at
+        FROM chairs
+        WHERE owner_id = ?
+    `, owner.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
-		log.Println("🍺query: ", query)
 		return
 	}
 
