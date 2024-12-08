@@ -151,7 +151,7 @@ func postInitialize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := db.ExecContext(ctx, "UPDATE settings SET value = ? WHERE name = 'payment_gateway_url'", req.PaymentServer); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to update payment_gateway_url: %w", err))
 		return
 	}
 

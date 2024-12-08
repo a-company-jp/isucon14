@@ -209,7 +209,7 @@ func appGetRides(w http.ResponseWriter, r *http.Request) {
 		`SELECT * FROM rides WHERE user_id = ? ORDER BY created_at DESC`,
 		user.ID,
 	); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to select rides: %w", err))
 		return
 	}
 
@@ -266,12 +266,12 @@ func appGetRides(w http.ResponseWriter, r *http.Request) {
 	if len(chairIDs) > 0 {
 		query, args, err := sqlx.In(`SELECT * FROM chairs WHERE id IN (?)`, chairIDs)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to create query: %w", err))
 			return
 		}
 		query = tx.Rebind(query)
 		if err := tx.SelectContext(ctx, &chairs, query, args...); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to select chairs: %w", err))
 			return
 		}
 	}

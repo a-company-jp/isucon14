@@ -137,7 +137,7 @@ func ownerGetSales(w http.ResponseWriter, r *http.Request) {
 	query = db.Rebind(query)
 
 	if err := db.SelectContext(ctx, &rideSalesData, query, args...); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to get ride sales: %w", err))
 		return
 	}
 
