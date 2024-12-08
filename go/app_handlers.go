@@ -45,7 +45,7 @@ func appPostUsers(w http.ResponseWriter, r *http.Request) {
 
 	tx, err := db.Beginx()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to begin transaction: %w", err))
 		return
 	}
 	defer tx.Rollback()
@@ -56,7 +56,7 @@ func appPostUsers(w http.ResponseWriter, r *http.Request) {
 		userID, req.Username, req.FirstName, req.LastName, req.DateOfBirth, accessToken, invitationCode,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to insert user: %w", err))
 		return
 	}
 
