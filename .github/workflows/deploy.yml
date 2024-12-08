@@ -1,0 +1,23 @@
+name: Deploy
+on:
+  push:
+    branches:
+      - main
+jobs:
+  deploy:
+    runs-on: isu14-1
+    steps:
+      - name: Deploy
+        run: |
+          cd /home/isucon/webapp/go
+          git pull
+          go mod download
+          go build .
+          sudo systemctl restart isuride-go.service
+#       - name: Exec migrate
+#         run: |
+#           cd /home/isucon/webapp/sql
+#           make up
+      - name: Check status
+        run: |
+          systemctl is-active --quiet isupipe-go
