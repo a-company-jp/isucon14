@@ -115,12 +115,13 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 
 	// 最新の座標を取得
 	var lastLatitude, lastLongitude int
-	err = tx.GetContext(ctx, &lastLatitude, `SELECT latitude FROM chair_locations WHERE chair_id = ? ORDER BY created_at DESC LIMIT 1`, chair.ID)
+	err = tx.GetContext(ctx, &lastLatitude, `SELECT latitude, longitude FROM chair_locations WHERE chair_id = ? ORDER BY created_at DESC LIMIT 1`, chair.ID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 
+	// 新しい座標のIDを生成
 	chairLocationID := ulid.Make().String()
 	if _, err := tx.ExecContext(
 		ctx,
@@ -131,50 +132,58 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 距離を計算して更新
-	distance := abs(req.Latitude-lastLatitude) + abs(req.Longitude-lastLongitude)
-	_, err = tx.ExecContext(ctx, `UPDATE chairs SET total_distance = total_distance + ?, total_distance_updated_at = NOW() WHERE id = ?`, distance, chair.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-
-	location := &ChairLocation{}
-	if err := tx.GetContext(ctx, location, `SELECT * FROM chair_locations WHERE id = ?`, chairLocationID); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-
-	ride := &Ride{}
-	if err := tx.GetContext(ctx, ride, `SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1`, chair.ID); err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
+	// 距離を計算して更新（絶対距離が0なら更新しない）
+	if req.Latitude != lastLatitude || req.Longitude != lastLongitude {
+		distance := abs(req.Latitude-lastLatitude) + abs(req.Longitude-lastLongitude)
+		_, err = tx.ExecContext(ctx, `UPDATE chairs SET total_distance = total_distance + ?, total_distance_updated_at = NOW() WHERE id = ?`, distance, chair.ID)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-	} else {
+	}
+
+	// 直近のrideを取得
+	ride := &Ride{}
+	err = tx.GetContext(ctx, ride, `SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1`, chair.ID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	// ride_statuses の更新処理
+	if err == nil { // rideが存在する場合のみ処理
 		status, err := getLatestRideStatus(ctx, tx, ride.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		if status != "COMPLETED" && status != "CANCELED" {
-			if req.Latitude == ride.PickupLatitude && req.Longitude == ride.PickupLongitude && status == "ENROUTE" {
-				if _, err := tx.ExecContext(ctx, "INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "PICKUP"); err != nil {
-					writeError(w, http.StatusInternalServerError, err)
-					return
-				}
-			}
 
-			if req.Latitude == ride.DestinationLatitude && req.Longitude == ride.DestinationLongitude && status == "CARRYING" {
-				if _, err := tx.ExecContext(ctx, "INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "ARRIVED"); err != nil {
-					writeError(w, http.StatusInternalServerError, err)
-					return
-				}
+		// 状態が "ENROUTE" かつ座標がピックアップ地点で一致する場合
+		if status == "ENROUTE" && req.Latitude == ride.PickupLatitude && req.Longitude == ride.PickupLongitude {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "PICKUP"); err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+		}
+
+		// 状態が "CARRYING" かつ座標が目的地で一致する場合
+		if status == "CARRYING" && req.Latitude == ride.DestinationLatitude && req.Longitude == ride.DestinationLongitude {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "ARRIVED"); err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
 			}
 		}
 	}
 
+	// トランザクションをコミット
 	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	// レスポンスを返す
+	location := &ChairLocation{}
+	if err := tx.GetContext(ctx, location, `SELECT * FROM chair_locations WHERE id = ?`, chairLocationID); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
