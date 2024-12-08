@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log"
 	"net/http"
 )
 
@@ -34,6 +35,7 @@ func appAuthMiddleware(next http.Handler) http.Handler {
 
 func ownerAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Println("ownerAuthMiddleware")
 		ctx := r.Context()
 		c, err := r.Cookie("owner_session")
 		if errors.Is(err, http.ErrNoCookie) || c.Value == "" {
