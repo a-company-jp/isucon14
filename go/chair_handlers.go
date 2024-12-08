@@ -113,6 +113,14 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
+	// 最新の座標を取得
+	var lastLatitude, lastLongitude int
+	err = tx.QueryRowContext(ctx, `SELECT latitude, longitude FROM chair_locations WHERE chair_id = ? ORDER BY created_at DESC LIMIT 1`, chair.ID).Scan(&lastLatitude, &lastLongitude)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
 	chairLocationID := ulid.Make().String()
 	if _, err := tx.ExecContext(
 		ctx,
@@ -126,6 +134,13 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 	location := &ChairLocation{}
 	if err := tx.GetContext(ctx, location, `SELECT * FROM chair_locations WHERE id = ?`, chairLocationID); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to get chair location: %w", err))
+		return
+	}
+
+	distance := abs(req.Latitude-lastLatitude) + abs(req.Longitude-lastLongitude)
+	_, err = tx.ExecContext(ctx, `UPDATE chairs SET total_distance = total_distance + ?, total_distance_updated_at = NOW() WHERE id = ?`, distance, chair.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 
