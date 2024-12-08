@@ -222,6 +222,8 @@ func ownerGetChairs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	owner := ctx.Value("owner").(*Owner)
 
+	log.Fatalf("owner: %v", owner)
+
 	chairs := []chairWithDetail{}
 	query := `SELECT
             c.id,
