@@ -40,7 +40,7 @@ func chairPostChairs(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnauthorized, errors.New("invalid chair_register_token"))
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to get owner: %w", err))
 		return
 	}
 
@@ -53,7 +53,7 @@ func chairPostChairs(w http.ResponseWriter, r *http.Request) {
 		chairID, owner.ID, req.Name, req.Model, false, accessToken,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to insert chair: %w", err))
 		return
 	}
 
