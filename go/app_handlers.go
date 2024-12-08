@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -877,6 +879,19 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := ctx.Value("user").(*User)
 
+	// SSE用のヘッダー設定
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Transfer-Encoding", "chunked")
+
+	// SSEの接続がクローズされた場合の処理
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, errors.New("failed to cast response writer"))
+		return
+	}
+
 	tx, err := db.Beginx()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -884,6 +899,7 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
+	// 最新のライドを取得
 	ride := &Ride{}
 	if err := tx.GetContext(ctx, ride, `SELECT * FROM rides WHERE user_id = ? ORDER BY created_at DESC LIMIT 1`, user.ID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -896,21 +912,11 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	yetSentRideStatus := RideStatus{}
-	status := ""
-	if err := tx.GetContext(ctx, &yetSentRideStatus, `SELECT * FROM ride_statuses WHERE ride_id = ? AND app_sent_at IS NULL ORDER BY created_at ASC LIMIT 1`, ride.ID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			status, err = getLatestRideStatus(ctx, tx, ride.ID)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, err)
-				return
-			}
-		} else {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-	} else {
-		status = yetSentRideStatus.Status
+	// 最初の通知送信（最新のライド状態）
+	status, err := getLatestRideStatus(ctx, tx, ride.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
 	}
 
 	fare, err := calculateDiscountedFare(ctx, tx, user.ID, ride, ride.PickupLatitude, ride.PickupLongitude, ride.DestinationLatitude, ride.DestinationLongitude)
@@ -938,41 +944,41 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 		RetryAfterMs: 30,
 	}
 
-	if ride.ChairID.Valid {
-		chair := &Chair{}
-		if err := tx.GetContext(ctx, chair, `SELECT * FROM chairs WHERE id = ?`, ride.ChairID); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
+	// 最初の通知メッセージ送信
+	sendUserSSEMessage(w, response)
+	flusher.Flush() // 最初の通知後にフラッシュする
+
+	// ライド状態の変化を監視
+	// 定期的にライドの状態をチェックして、変更があれば通知する
+	go func() {
+		ticker := time.NewTicker(30 * time.Second) // 定期的にチェック
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				// 状態が変わった場合のみ通知
+				updatedStatus, err := getLatestRideStatus(ctx, tx, ride.ID)
+				if err != nil {
+					// エラーがあれば適切に通知
+					writeError(w, http.StatusInternalServerError, err)
+					return
+				}
+
+				if updatedStatus != status {
+					// 新しい状態を通知
+					status = updatedStatus
+
+					// レスポンスに状態を更新して通知
+					response.Data.Status = status
+					sendUserSSEMessage(w, response)
+					flusher.Flush() // 通知後にフラッシュ
+				}
+			case <-r.Context().Done(): // 接続終了時
+				return
+			}
 		}
-
-		stats, err := getChairStats(ctx, tx, chair.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-
-		response.Data.Chair = &appGetNotificationResponseChair{
-			ID:    chair.ID,
-			Name:  chair.Name,
-			Model: chair.Model,
-			Stats: stats,
-		}
-	}
-
-	if yetSentRideStatus.ID != "" {
-		_, err := tx.ExecContext(ctx, `UPDATE ride_statuses SET app_sent_at = CURRENT_TIMESTAMP(6) WHERE id = ?`, yetSentRideStatus.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-
-	writeJSON(w, http.StatusOK, response)
+	}()
 }
 
 func getChairStats(ctx context.Context, tx *sqlx.Tx, chairID string) (appGetNotificationResponseChairStats, error) {
@@ -1218,4 +1224,18 @@ func calculateDiscountedFare(ctx context.Context, tx *sqlx.Tx, userID string, ri
 	discountedMeteredFare := max(meteredFare-discount, 0)
 
 	return initialFare + discountedMeteredFare, nil
+}
+
+// sendUserSSEMessageは、SSEメッセージをクライアントに送信します
+func sendUserSSEMessage(w http.ResponseWriter, response *appGetNotificationResponse) {
+	// SSEメッセージを送信
+	jsonData, err := json.Marshal(response)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	// SSEフォーマットで送信
+	fmt.Fprintf(w, "data: %s\n\n", jsonData)
+	w.(http.Flusher).Flush()
 }
