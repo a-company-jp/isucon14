@@ -1085,75 +1085,96 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 
 	coordinate := Coordinate{Latitude: lat, Longitude: lon}
 
-	query := `
-        SELECT 
-            c.id, 
-            c.name, 
-            c.model, 
-            cl.latitude, 
-            cl.longitude
-        FROM 
-            chairs c
-        JOIN (
-            SELECT cl1.chair_id, cl1.latitude, cl1.longitude
-            FROM chair_locations cl1
-            WHERE cl1.created_at = (
-                SELECT MAX(cl2.created_at)
-                FROM chair_locations cl2
-                WHERE cl2.chair_id = cl1.chair_id
-            )
-        ) cl ON c.id = cl.chair_id
-        WHERE 
-            c.is_active = TRUE
-            AND NOT EXISTS (
-                SELECT 1
-                FROM rides r
-                JOIN ride_statuses rs ON r.id = rs.ride_id
-                WHERE r.chair_id = c.id
-                  AND rs.status != 'COMPLETED'
-            )
-            AND ABS(cl.latitude - ?) + ABS(cl.longitude - ?) <= ?
-        ORDER BY 
-            ABS(cl.latitude - ?) + ABS(cl.longitude - ?) ASC
-        LIMIT 100
-    `
-
-	var chairsWithLocation []struct {
-		ID        string `db:"id"`
-		Name      string `db:"name"`
-		Model     string `db:"model"`
-		Latitude  int    `db:"latitude"`
-		Longitude int    `db:"longitude"`
+	tx, err := db.Beginx()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
 	}
+	defer tx.Rollback()
 
-	err = db.SelectContext(ctx, &chairsWithLocation, query,
-		coordinate.Latitude, coordinate.Longitude, distance,
-		coordinate.Latitude, coordinate.Longitude,
+	chairs := []Chair{}
+	err = tx.SelectContext(
+		ctx,
+		&chairs,
+		`SELECT * FROM chairs`,
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 
-	// レスポンス用の構造体に変換
-	nearbyChairs := make([]appGetNearbyChairsResponseChair, 0, len(chairsWithLocation))
-	for _, c := range chairsWithLocation {
-		nearbyChairs = append(nearbyChairs, appGetNearbyChairsResponseChair{
-			ID:    c.ID,
-			Name:  c.Name,
-			Model: c.Model,
-			CurrentCoordinate: Coordinate{
-				Latitude:  c.Latitude,
-				Longitude: c.Longitude,
-			},
-		})
+	nearbyChairs := []appGetNearbyChairsResponseChair{}
+	for _, chair := range chairs {
+		if !chair.IsActive {
+			continue
+		}
+
+		rides := []*Ride{}
+		if err := tx.SelectContext(ctx, &rides, `SELECT * FROM rides WHERE chair_id = ? ORDER BY created_at DESC`, chair.ID); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+
+		skip := false
+		for _, ride := range rides {
+			// 過去にライドが存在し、かつ、それが完了していない場合はスキップ
+			status, err := getLatestRideStatus(ctx, tx, ride.ID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			if status != "COMPLETED" {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+
+		// 最新の位置情報を取得
+		chairLocation := &ChairLocation{}
+		err = tx.GetContext(
+			ctx,
+			chairLocation,
+			`SELECT * FROM chair_locations WHERE chair_id = ? ORDER BY created_at DESC LIMIT 1`,
+			chair.ID,
+		)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+
+		if calculateDistance(coordinate.Latitude, coordinate.Longitude, chairLocation.Latitude, chairLocation.Longitude) <= distance {
+			nearbyChairs = append(nearbyChairs, appGetNearbyChairsResponseChair{
+				ID:    chair.ID,
+				Name:  chair.Name,
+				Model: chair.Model,
+				CurrentCoordinate: Coordinate{
+					Latitude:  chairLocation.Latitude,
+					Longitude: chairLocation.Longitude,
+				},
+			})
+		}
 	}
 
-	retrievedAt := time.Now().UnixMilli()
+	retrievedAt := &time.Time{}
+	err = tx.GetContext(
+		ctx,
+		retrievedAt,
+		`SELECT CURRENT_TIMESTAMP(6)`,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 
 	writeJSON(w, http.StatusOK, &appGetNearbyChairsResponse{
 		Chairs:      nearbyChairs,
-		RetrievedAt: retrievedAt,
+		RetrievedAt: retrievedAt.UnixMilli(),
 	})
 }
 
