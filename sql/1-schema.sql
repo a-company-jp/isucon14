@@ -44,8 +44,6 @@ CREATE TABLE chair_locations
   latitude   INTEGER     NOT NULL COMMENT '経度',
   longitude  INTEGER     NOT NULL COMMENT '緯度',
   created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '登録日時',
-  total_distance        INTEGER NOT NULL DEFAULT 0 COMMENT '総移動距離',
-  total_distance_updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '総移動距離の更新日時',
   PRIMARY KEY (id)
 )
   COMMENT = '椅子の現在位置情報テーブル';
