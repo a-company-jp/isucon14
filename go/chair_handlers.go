@@ -47,11 +47,14 @@ func chairPostChairs(w http.ResponseWriter, r *http.Request) {
 	chairID := ulid.Make().String()
 	accessToken := secureRandomStr(32)
 
-	_, err := db.ExecContext(
-		ctx,
-		"INSERT INTO chairs (id, owner_id, name, model, is_active, access_token) VALUES (?, ?, ?, ?, ?, ?)",
-		chairID, owner.ID, req.Name, req.Model, false, accessToken,
-	)
+	err := chairRepo.InsertChair(ctx, &Chair{
+		ID:          chairID,
+		OwnerID:     owner.ID,
+		Name:        req.Name,
+		Model:       req.Model,
+		IsActive:    false,
+		AccessToken: accessToken,
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to insert chair: %w", err))
 		return

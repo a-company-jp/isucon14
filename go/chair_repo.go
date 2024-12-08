@@ -79,3 +79,12 @@ func (r *ChairRepository) selectChairsByOwnerID(ctx context.Context, ownerID str
 	*dest = results
 	return nil
 }
+
+func (r *ChairRepository) InsertChair(ctx context.Context, c *Chair) error {
+	r.InvalidateCacheByOwnerID(c.OwnerID)
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO chairs (id, owner_id, name, model, is_active, access_token, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, c.ID, c.OwnerID, c.Name, c.Model, c.IsActive, c.AccessToken, c.CreatedAt, c.UpdatedAt)
+	return err
+}
