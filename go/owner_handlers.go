@@ -218,5 +218,44 @@ type ownerGetChairResponseChair struct {
 }
 
 func ownerGetChairs(w http.ResponseWriter, r *http.Request) {
-	return
+	ctx := r.Context()
+	owner := ctx.Value("owner").(*Owner)
+
+	chairs := []chairWithDetail{}
+	query := `SELECT
+            c.id,
+            c.owner_id,
+            c.name,
+            c.access_token,
+            c.model,
+            c.is_active,
+            c.created_at,
+            c.updated_at,
+            c.total_distance,
+            c.total_distance_updated_at
+        FROM chairs c
+        WHERE c.owner_id = ?
+   `
+	if err := db.SelectContext(ctx, &chairs, query, owner.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("query: %s, error: %w", query, err))
+		return
+	}
+
+	res := ownerGetChairResponse{}
+	for _, chair := range chairs {
+		c := ownerGetChairResponseChair{
+			ID:            chair.ID,
+			Name:          chair.Name,
+			Model:         chair.Model,
+			Active:        chair.IsActive,
+			RegisteredAt:  chair.CreatedAt.UnixMilli(),
+			TotalDistance: chair.TotalDistance,
+		}
+		if chair.TotalDistanceUpdatedAt.Valid {
+			t := chair.TotalDistanceUpdatedAt.Time.UnixMilli()
+			c.TotalDistanceUpdatedAt = &t
+		}
+		res.Chairs = append(res.Chairs, c)
+	}
+	writeJSON(w, http.StatusOK, res)
 }
