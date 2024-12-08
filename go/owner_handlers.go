@@ -221,48 +221,42 @@ func ownerGetChairs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	owner := ctx.Value("owner").(*Owner)
 
-	chairs := []chairWithDetail{}
-	if err := db.SelectContext(ctx, &chairs, `SELECT id,
-       owner_id,
-       name,
-       access_token,
-       model,
-       is_active,
-       created_at,
-       updated_at,
-       IFNULL(total_distance, 0) AS total_distance,
-       total_distance_updated_at
-FROM chairs
-       LEFT JOIN (SELECT chair_id,
-                          SUM(IFNULL(distance, 0)) AS total_distance,
-                          MAX(created_at)          AS total_distance_updated_at
-                   FROM (SELECT chair_id,
-                                created_at,
-                                ABS(latitude - LAG(latitude) OVER (PARTITION BY chair_id ORDER BY created_at)) +
-                                ABS(longitude - LAG(longitude) OVER (PARTITION BY chair_id ORDER BY created_at)) AS distance
-                         FROM chair_locations) tmp
-                   GROUP BY chair_id) distance_table ON distance_table.chair_id = chairs.id
-WHERE owner_id = ?
-`, owner.ID); err != nil {
+	// 単純なchairsの取得
+	chairs := []Chair{}
+	err := db.SelectContext(ctx, &chairs, "SELECT * FROM chairs WHERE owner_id = ?", owner.ID)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 
 	res := ownerGetChairResponse{}
-	for _, chair := range chairs {
-		c := ownerGetChairResponseChair{
-			ID:            chair.ID,
-			Name:          chair.Name,
-			Model:         chair.Model,
-			Active:        chair.IsActive,
-			RegisteredAt:  chair.CreatedAt.UnixMilli(),
-			TotalDistance: chair.TotalDistance,
+	for _, c := range chairs {
+		dist, err := chairDistanceRepo.GetTotalDistance(ctx, c.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
 		}
-		if chair.TotalDistanceUpdatedAt.Valid {
-			t := chair.TotalDistanceUpdatedAt.Time.UnixMilli()
-			c.TotalDistanceUpdatedAt = &t
+
+		var totalDistance int
+		var updatedAt *int64
+		if dist != nil {
+			totalDistance = dist.TotalDistance
+			if !dist.TotalDistanceUpdated.IsZero() {
+				u := dist.TotalDistanceUpdated.UnixMilli()
+				updatedAt = &u
+			}
 		}
-		res.Chairs = append(res.Chairs, c)
+
+		res.Chairs = append(res.Chairs, ownerGetChairResponseChair{
+			ID:                     c.ID,
+			Name:                   c.Name,
+			Model:                  c.Model,
+			Active:                 c.IsActive,
+			RegisteredAt:           c.CreatedAt.UnixMilli(),
+			TotalDistance:          totalDistance,
+			TotalDistanceUpdatedAt: updatedAt,
+		})
 	}
+
 	writeJSON(w, http.StatusOK, res)
 }
