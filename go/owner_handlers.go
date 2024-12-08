@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -237,6 +238,7 @@ func ownerGetChairs(w http.ResponseWriter, r *http.Request) {
         WHERE c.owner_id = ?
    `
 	if err := db.SelectContext(ctx, &chairs, query, owner.ID); err != nil {
+		log.Fatalf("failed to get chairs: query: %s, error: %v", query, err)
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("query: %s, error: %w", query, err))
 		return
 	}
