@@ -20,4 +20,4 @@ jobs:
 #           make up
       - name: Check status
         run: |
-          systemctl is-active --quiet isu-go
+          systemctl is-active --quiet isuride-go
