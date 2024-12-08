@@ -199,6 +199,214 @@ func appGetRides(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
+	// 1. ユーザーの全ライドを取得
+	rides := []Ride{}
+	if err := tx.SelectContext(
+		ctx,
+		&rides,
+		`SELECT * FROM rides WHERE user_id = ? ORDER BY created_at DESC`,
+		user.ID,
+	); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	if len(rides) == 0 {
+		// ライドがない場合は空のレスポンスを返す
+		writeJSON(w, http.StatusOK, &getAppRidesResponse{
+			Rides: []getAppRidesResponseItem{},
+		})
+		return
+	}
+
+	// 2. ライドIDを収集
+	rideIDs := make([]string, len(rides))
+	for i, ride := range rides {
+		rideIDs[i] = ride.ID
+	}
+
+	// 3. 最新のライドステータスを一括で取得
+	latestStatuses, err := getLatestRideStatuses(ctx, tx, rideIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	// 4. ステータスが"COMPLETED"のライドをフィルタリング
+	completedRides := []Ride{}
+	completedRideIDs := []string{}
+	for _, ride := range rides {
+		status, exists := latestStatuses[ride.ID]
+		if exists && status == "COMPLETED" {
+			completedRides = append(completedRides, ride)
+			completedRideIDs = append(completedRideIDs, ride.ID)
+		}
+	}
+
+	if len(completedRides) == 0 {
+		// 完了したライドがない場合は空のレスポンスを返す
+		writeJSON(w, http.StatusOK, &getAppRidesResponse{
+			Rides: []getAppRidesResponseItem{},
+		})
+		return
+	}
+
+	// 5. 完了したライドから椅子IDを収集
+	chairIDs := make([]string, 0, len(completedRides))
+	for _, ride := range completedRides {
+		if ride.ChairID.Valid {
+			chairIDs = append(chairIDs, ride.ChairID.String)
+		}
+	}
+
+	// 6. 椅子情報を一括で取得
+	chairs := []Chair{}
+	if len(chairIDs) > 0 {
+		query, args, err := sqlx.In(`SELECT * FROM chairs WHERE id IN (?)`, chairIDs)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		query = tx.Rebind(query)
+		if err := tx.SelectContext(ctx, &chairs, query, args...); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+
+	// 椅子IDからChairへのマップを作成
+	chairMap := make(map[string]Chair, len(chairs))
+	for _, chair := range chairs {
+		chairMap[chair.ID] = chair
+	}
+
+	// 7. 椅子の所有者IDを収集
+	ownerIDs := make([]string, 0, len(chairs))
+	for _, chair := range chairs {
+		ownerIDs = append(ownerIDs, chair.OwnerID)
+	}
+
+	// 8. 所有者情報を一括で取得
+	owners := []Owner{}
+	if len(ownerIDs) > 0 {
+		query, args, err := sqlx.In(`SELECT * FROM owners WHERE id IN (?)`, ownerIDs)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		query = tx.Rebind(query)
+		if err := tx.SelectContext(ctx, &owners, query, args...); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+
+	// 所有者IDからOwnerへのマップを作成
+	ownerMap := make(map[string]Owner, len(owners))
+	for _, owner := range owners {
+		ownerMap[owner.ID] = owner
+	}
+
+	// 9. レスポンス用のアイテムを作成
+	items := make([]getAppRidesResponseItem, 0, len(completedRides))
+	for _, ride := range completedRides {
+		fare, err := calculateDiscountedFare(ctx, tx, user.ID, &ride, ride.PickupLatitude, ride.PickupLongitude, ride.DestinationLatitude, ride.DestinationLongitude)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+
+		item := getAppRidesResponseItem{
+			ID:                    ride.ID,
+			PickupCoordinate:      Coordinate{Latitude: ride.PickupLatitude, Longitude: ride.PickupLongitude},
+			DestinationCoordinate: Coordinate{Latitude: ride.DestinationLatitude, Longitude: ride.DestinationLongitude},
+			Fare:                  fare,
+			Evaluation:            *ride.Evaluation,
+			RequestedAt:           ride.CreatedAt.UnixMilli(),
+			CompletedAt:           ride.UpdatedAt.UnixMilli(),
+		}
+
+		// 椅子情報をマップから取得
+		if ride.ChairID.Valid {
+			chair, exists := chairMap[ride.ChairID.String]
+			if exists {
+				owner, ownerExists := ownerMap[chair.OwnerID]
+				if ownerExists {
+					item.Chair = getAppRidesResponseItemChair{
+						ID:    chair.ID,
+						Name:  chair.Name,
+						Model: chair.Model,
+						Owner: owner.Name,
+					}
+				}
+			}
+		}
+
+		items = append(items, item)
+	}
+
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, &getAppRidesResponse{
+		Rides: items,
+	})
+}
+
+// getLatestRideStatuses は複数のライドIDに対する最新のステータスを取得する関数です。
+func getLatestRideStatuses(ctx context.Context, tx *sqlx.Tx, rideIDs []string) (map[string]string, error) {
+	// サブクエリで各ライドの最新のcreated_atを取得し、それを基に最新のステータスを取得
+	query := `
+        SELECT rs1.ride_id, rs1.status
+        FROM ride_statuses rs1
+        INNER JOIN (
+            SELECT ride_id, MAX(created_at) AS max_created_at
+            FROM ride_statuses
+            WHERE ride_id IN (?)
+            GROUP BY ride_id
+        ) rs2 ON rs1.ride_id = rs2.ride_id AND rs1.created_at = rs2.max_created_at
+    `
+
+	// sqlx.Inを使用してIN句を適切に展開
+	query, args, err := sqlx.In(query, rideIDs)
+	if err != nil {
+		return nil, err
+	}
+	// Rebind is necessary for different SQL dialects
+	query = tx.Rebind(query)
+
+	type RideStatusResult struct {
+		RideID string `db:"ride_id"`
+		Status string `db:"status"`
+	}
+
+	results := []RideStatusResult{}
+	if err := tx.SelectContext(ctx, &results, query, args...); err != nil {
+		return nil, err
+	}
+
+	// マップに格納
+	statusMap := make(map[string]string, len(results))
+	for _, rs := range results {
+		statusMap[rs.RideID] = rs.Status
+	}
+
+	return statusMap, nil
+}
+
+func appGetRidesOld(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := ctx.Value("user").(*User)
+
+	tx, err := db.Beginx()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer tx.Rollback()
+
 	rides := []Ride{}
 	if err := tx.SelectContext(
 		ctx,
@@ -319,14 +527,21 @@ func appPostRides(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rideIDs := make([]string, len(rides))
+	for i, ride := range rides {
+		rideIDs[i] = ride.ID
+	}
+
+	latestStatuses, err := getLatestRideStatuses(ctx, tx, rideIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
 	continuingRideCount := 0
 	for _, ride := range rides {
-		status, err := getLatestRideStatus(ctx, tx, ride.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		if status != "COMPLETED" {
+		status, exists := latestStatuses[ride.ID]
+		if exists && status != "COMPLETED" {
 			continuingRideCount++
 		}
 	}
