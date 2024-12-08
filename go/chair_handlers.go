@@ -135,7 +135,7 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 	distance := abs(req.Latitude-lastLatitude) + abs(req.Longitude-lastLongitude)
 	_, err = tx.ExecContext(ctx, `UPDATE chairs SET total_distance = total_distance + ?, total_distance_updated_at = NOW() WHERE id = ?`, distance, chair.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to update total_distance: %w", err))
 		return
 	}
 
