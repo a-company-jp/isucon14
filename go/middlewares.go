@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"log"
+	"fmt"
 	"net/http"
 )
 
@@ -35,7 +35,6 @@ func appAuthMiddleware(next http.Handler) http.Handler {
 
 func ownerAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Println("ownerAuthMiddleware")
 		ctx := r.Context()
 		c, err := r.Cookie("owner_session")
 		if errors.Is(err, http.ErrNoCookie) || c.Value == "" {
@@ -49,7 +48,7 @@ func ownerAuthMiddleware(next http.Handler) http.Handler {
 				writeError(w, http.StatusUnauthorized, errors.New("invalid access token"))
 				return
 			}
-			writeError(w, http.StatusInternalServerError, err)
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to get owner: %w", err))
 			return
 		}
 
@@ -74,7 +73,7 @@ func chairAuthMiddleware(next http.Handler) http.Handler {
 				writeError(w, http.StatusUnauthorized, errors.New("invalid access token"))
 				return
 			}
-			writeError(w, http.StatusInternalServerError, err)
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to get chair: %w", err))
 			return
 		}
 
