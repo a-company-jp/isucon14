@@ -3,12 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"time"
-
-	"github.com/goccy/go-json"
 )
 
 var erroredUpstream = errors.New("errored upstream")
