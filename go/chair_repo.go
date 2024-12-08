@@ -3,15 +3,20 @@ package main
 import (
 	"context"
 	"database/sql"
+	"sync"
 )
 
 type ChairRepository struct {
-	db *sql.DB
+	db     *sql.DB
+	mutex1 sync.Mutex
+	mutex2 sync.Mutex
 }
 
 func NewChairRepository(db *sql.DB) (*ChairRepository, error) {
 	return &ChairRepository{
-		db: db,
+		db:     db,
+		mutex1: sync.Mutex{},
+		mutex2: sync.Mutex{},
 	}, nil
 }
 
@@ -25,7 +30,13 @@ func (r *ChairRepository) GetChairsByOwnerID(ctx context.Context, ownerID string
 			return chairs, nil
 		}
 	}
-
+	r.mutex1.Lock()
+	defer r.mutex1.Unlock()
+	if val, found := cache.Get(cacheKey); found {
+		if chairs, ok := val.([]Chair); ok {
+			return chairs, nil
+		}
+	}
 	chairs := []Chair{}
 	err := r.selectChairsByOwnerID(ctx, ownerID, &chairs)
 	if err != nil {
