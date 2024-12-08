@@ -4,6 +4,7 @@ import (
 	crand "crypto/rand"
 	"encoding/json"
 	"fmt"
+	"github.com/dgraph-io/ristretto"
 	"log/slog"
 	"net"
 	"net/http"
@@ -17,7 +18,22 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-var db *sqlx.DB
+var (
+	db    *sqlx.DB
+	cache *ristretto.Cache
+)
+
+func initCache() {
+	c, err := ristretto.NewCache(&ristretto.Config{
+		NumCounters: 1e7,
+		MaxCost:     1 << 30,
+		BufferItems: 64,
+	})
+	if err != nil {
+		panic(err)
+	}
+	cache = c
+}
 
 func main() {
 	mux := setup()
@@ -63,6 +79,7 @@ func setup() http.Handler {
 	if err != nil {
 		panic(err)
 	}
+	initCache()
 	db = _db
 
 	mux := chi.NewRouter()
