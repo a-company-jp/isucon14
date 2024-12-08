@@ -1,0 +1,15 @@
+name: Deploy
+on:
+  push:
+    branches:
+      - main
+jobs:
+  deploy:
+    runs-on: isu14-2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Exec migrate
+        run: |
+          cd ./sql
+          make up
