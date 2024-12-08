@@ -143,5 +143,3 @@ CREATE INDEX idx_ride_statuses_ride_id_created_at ON ride_statuses(ride_id, crea
 CREATE INDEX idx_rides_user_id ON rides(user_id);
 CREATE INDEX idx_rides_chair_id ON rides(chair_id);
 CREATE INDEX idx_chair_locations_chair_id_created_at ON chair_locations(chair_id, created_at DESC);
-CREATE INDEX idx_ride_statuses_ride_id_status ON ride_statuses(ride_id, status);
-CREATE INDEX idx_ride_statuses_created_at ON ride_statuses(created_at);
