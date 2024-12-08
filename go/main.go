@@ -19,8 +19,9 @@ import (
 )
 
 var (
-	db    *sqlx.DB
-	cache *ristretto.Cache
+	db                *sqlx.DB
+	cache             *ristretto.Cache
+	chairDistanceRepo *ChairDistanceRepository
 )
 
 func initCache() {
@@ -81,6 +82,11 @@ func setup() http.Handler {
 	}
 	initCache()
 	db = _db
+
+	chairDistanceRepo, err = NewChairDistanceRepository(db.DB)
+	if err != nil {
+		panic(err)
+	}
 
 	mux := chi.NewRouter()
 	mux.Use(middleware.Logger)
