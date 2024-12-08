@@ -24,7 +24,7 @@ func appAuthMiddleware(next http.Handler) http.Handler {
 				writeError(w, http.StatusUnauthorized, errors.New("invalid access token"))
 				return
 			}
-			writeError(w, http.StatusInternalServerError, err)
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to get user: %w", err))
 			return
 		}
 
