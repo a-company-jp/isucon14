@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"github.com/dgraph-io/ristretto"
 	"time"
 )
 
@@ -14,29 +13,19 @@ type ChairDistance struct {
 }
 
 type ChairDistanceRepository struct {
-	db    *sql.DB
-	cache *ristretto.Cache
+	db *sql.DB
 }
 
 // NewChairDistanceRepository はキャッシュ付きのレポジトリを生成
 func NewChairDistanceRepository(db *sql.DB) (*ChairDistanceRepository, error) {
-	cache, err := ristretto.NewCache(&ristretto.Config{
-		NumCounters: 1e4,
-		MaxCost:     1 << 25,
-		BufferItems: 64,
-	})
-	if err != nil {
-		return nil, err
-	}
 	return &ChairDistanceRepository{
-		db:    db,
-		cache: cache,
+		db: db,
 	}, nil
 }
 
 // GetTotalDistance はキャッシュから合計距離を取得し、キャッシュに無ければDBを参照して計算する
 func (r *ChairDistanceRepository) GetTotalDistance(ctx context.Context, chairID string) (*ChairDistance, error) {
-	if val, found := r.cache.Get("chair_distance:" + chairID); found {
+	if val, found := cache.Get("chair_distance:" + chairID); found {
 		if dist, ok := val.(*ChairDistance); ok {
 			return dist, nil
 		}
@@ -79,7 +68,7 @@ func (r *ChairDistanceRepository) GetTotalDistance(ctx context.Context, chairID 
 		TotalDistance:        totalDist,
 		TotalDistanceUpdated: lastTime,
 	}
-	r.cache.Set("chair_distance:"+chairID, dist, 1)
+	cache.Set("chair_distance:"+chairID, dist, 1)
 
 	return dist, nil
 }
@@ -105,7 +94,7 @@ func (r *ChairDistanceRepository) UpdateDistance(ctx context.Context, loc *Chair
 		diff := abs(loc.Latitude-prevLoc.Latitude) + abs(loc.Longitude-prevLoc.Longitude)
 		distVal.TotalDistance += diff
 		distVal.TotalDistanceUpdated = loc.CreatedAt
-		r.cache.Set("chair_distance:"+loc.ChairID, distVal, 1)
+		cache.Set("chair_distance:"+loc.ChairID, distVal, 1)
 	}
 	return nil
 }

@@ -22,6 +22,8 @@ var (
 	db                *sqlx.DB
 	cache             *ristretto.Cache
 	chairDistanceRepo *ChairDistanceRepository
+	chairRepo         *ChairRepository
+	userRepository    *UserRepository
 )
 
 func initCache() {
@@ -87,6 +89,20 @@ func setup() http.Handler {
 	if err != nil {
 		panic(err)
 	}
+
+	chairRepo, err = NewChairRepository(db.DB)
+	if err != nil {
+		panic(err)
+	}
+
+	userRepository, err = NewUserRepository(db.DB)
+	if err != nil {
+		panic(err)
+	}
+	//chairLocationRepo, err = NewChairLocationRepository(db.DB)
+	//if err != nil {
+	//	panic(err)
+	//}
 
 	mux := chi.NewRouter()
 	mux.Use(middleware.Logger)

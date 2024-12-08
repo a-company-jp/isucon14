@@ -221,9 +221,7 @@ func ownerGetChairs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	owner := ctx.Value("owner").(*Owner)
 
-	// 単純なchairsの取得
-	chairs := []Chair{}
-	err := db.SelectContext(ctx, &chairs, "SELECT * FROM chairs WHERE owner_id = ?", owner.ID)
+	chairs, err := chairRepo.GetChairsByOwnerID(ctx, owner.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
