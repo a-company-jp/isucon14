@@ -293,12 +293,12 @@ func appGetRides(w http.ResponseWriter, r *http.Request) {
 	if len(ownerIDs) > 0 {
 		query, args, err := sqlx.In(`SELECT * FROM owners WHERE id IN (?)`, ownerIDs)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to create query: %w", err))
 			return
 		}
 		query = tx.Rebind(query)
 		if err := tx.SelectContext(ctx, &owners, query, args...); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to select owners: %w", err))
 			return
 		}
 	}
@@ -314,7 +314,7 @@ func appGetRides(w http.ResponseWriter, r *http.Request) {
 	for _, ride := range completedRides {
 		fare, err := calculateDiscountedFare(ctx, tx, user.ID, &ride, ride.PickupLatitude, ride.PickupLongitude, ride.DestinationLatitude, ride.DestinationLongitude)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to calculate discounted fare: %w", err))
 			return
 		}
 
@@ -348,7 +348,7 @@ func appGetRides(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := tx.Commit(); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to commit transaction: %w", err))
 		return
 	}
 
@@ -416,7 +416,7 @@ func appGetRidesOld(w http.ResponseWriter, r *http.Request) {
 		`SELECT * FROM rides WHERE user_id = ? ORDER BY created_at DESC`,
 		user.ID,
 	); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to select rides: %w", err))
 		return
 	}
 

@@ -221,7 +221,7 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 
 	tx, err := db.Beginx()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to begin transaction: %w", err))
 		return
 	}
 	defer tx.Rollback()
@@ -238,7 +238,7 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to get ride: %w", err))
 		return
 	}
 
@@ -247,11 +247,11 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, sql.ErrNoRows) {
 			status, err = getLatestRideStatus(ctx, tx, ride.ID)
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, err)
+				writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to get latest ride status: %w", err))
 				return
 			}
 		} else {
-			writeError(w, http.StatusInternalServerError, err)
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to get ride status: %w", err))
 			return
 		}
 	} else {
@@ -262,7 +262,7 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 	user := &User{}
 	err = tx.GetContext(ctx, user, "SELECT * FROM users WHERE id = ? FOR SHARE", ride.UserID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to get user: %w", err))
 		return
 	}
 
@@ -303,7 +303,7 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 				// 状態が変わった場合のみ通知
 				updatedStatus, err := getLatestRideStatus(ctx, tx, ride.ID)
 				if err != nil {
-					writeError(w, http.StatusInternalServerError, err)
+					writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to get latest ride status: %w", err))
 					return
 				}
 
@@ -324,7 +324,7 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 
 	// 最後にトランザクションのコミット
 	if err := tx.Commit(); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to commit transaction: %w", err))
 		return
 	}
 }
@@ -347,7 +347,7 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 
 	tx, err := db.Beginx()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to begin transaction: %w", err))
 		return
 	}
 	defer tx.Rollback()
@@ -358,7 +358,7 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, errors.New("ride not found"))
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to get ride: %w", err))
 		return
 	}
 
@@ -371,14 +371,14 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 	// Acknowledge the ride
 	case "ENROUTE":
 		if _, err := tx.ExecContext(ctx, "INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "ENROUTE"); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to update ride status: %w", err))
 			return
 		}
 	// After Picking up user
 	case "CARRYING":
 		status, err := getLatestRideStatus(ctx, tx, ride.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to get latest ride status: %w", err))
 			return
 		}
 		if status != "PICKUP" {
@@ -394,7 +394,7 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := tx.Commit(); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to commit transaction: %w", err))
 		return
 	}
 
@@ -406,7 +406,7 @@ func sendChairSSEMessage(w http.ResponseWriter, response *chairGetNotificationRe
 	// SSEメッセージを送信
 	jsonData, err := json.Marshal(response)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to marshal json: %w", err))
 		return
 	}
 
