@@ -232,7 +232,7 @@ func ownerGetChairs(w http.ResponseWriter, r *http.Request) {
             is_active,
             created_at,
             updated_at,
-            IFNULL(chairs.total_distance, 0) AS total_distance,
+            IFNULL(total_distance, 0) AS total_distance,
             total_distance_updated_at
         FROM chairs
         WHERE owner_id = ?
