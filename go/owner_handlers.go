@@ -221,99 +221,48 @@ func ownerGetChairs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	owner := ctx.Value("owner").(*Owner)
 
-	// 1. 椅子一覧取得
-	chairs := []Chair{}
-	if err := db.SelectContext(ctx, &chairs, `SELECT * FROM chairs WHERE owner_id = ?`, owner.ID); err != nil {
+	chairs := []chairWithDetail{}
+	if err := db.SelectContext(ctx, &chairs, `SELECT id,
+       owner_id,
+       name,
+       access_token,
+       model,
+       is_active,
+       created_at,
+       updated_at,
+       IFNULL(total_distance, 0) AS total_distance,
+       total_distance_updated_at
+FROM chairs
+       LEFT JOIN (SELECT chair_id,
+                          SUM(IFNULL(distance, 0)) AS total_distance,
+                          MAX(created_at)          AS total_distance_updated_at
+                   FROM (SELECT chair_id,
+                                created_at,
+                                ABS(latitude - LAG(latitude) OVER (PARTITION BY chair_id ORDER BY created_at)) +
+                                ABS(longitude - LAG(longitude) OVER (PARTITION BY chair_id ORDER BY created_at)) AS distance
+                         FROM chair_locations) tmp
+                   GROUP BY chair_id) distance_table ON distance_table.chair_id = chairs.id
+WHERE owner_id = ?
+`, owner.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 
-	if len(chairs) == 0 {
-		// オーナーに紐づく椅子が無い場合
-		writeJSON(w, http.StatusOK, ownerGetChairResponse{Chairs: []ownerGetChairResponseChair{}})
-		return
-	}
-
-	// 2. 椅子ID一覧抽出
-	chairIDs := make([]string, len(chairs))
-	for i, c := range chairs {
-		chairIDs[i] = c.ID
-	}
-
-	// 3. チェアロケーションを椅子IDに基づいて一括取得
-	// chair_idでソートすることで後の集計時にグループ化が容易になる
-	query, args, err := sqlx.In(`SELECT * FROM chair_locations WHERE chair_id IN (?) ORDER BY chair_id, created_at`, chairIDs)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	query = db.Rebind(query)
-
-	var locations []ChairLocation
-	if err := db.SelectContext(ctx, &locations, query, args...); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-
-	// 4. コード側で距離計算・最新時刻取得
-	// chairIDごとに前回のlocationを保持し、距離を累積
-	type distanceInfo struct {
-		totalDistance int
-		updatedAt     time.Time
-		lastLat       *int
-		lastLon       *int
-	}
-
-	distMap := make(map[string]*distanceInfo, len(chairs))
-	for _, c := range chairs {
-		distMap[c.ID] = &distanceInfo{
-			totalDistance: 0,
-			updatedAt:     c.UpdatedAt, // 初期値としては椅子登録時など必要に応じて
-		}
-	}
-
-	for _, loc := range locations {
-		info := distMap[loc.ChairID]
-		if info == nil {
-			// chair_idsがマッチしない場合（通常無いはず）
-			continue
-		}
-		if info.lastLat != nil && info.lastLon != nil {
-			dist := abs(loc.Latitude-*info.lastLat) + abs(loc.Longitude-*info.lastLon)
-			info.totalDistance += dist
-		}
-		info.lastLat = &loc.Latitude
-		info.lastLon = &loc.Longitude
-
-		// updatedAtは最新のcreated_atを常に更新
-		if loc.CreatedAt.After(info.updatedAt) {
-			info.updatedAt = loc.CreatedAt
-		}
-	}
-
-	// 5. レスポンス構築
 	res := ownerGetChairResponse{}
-	for _, c := range chairs {
-		info := distMap[c.ID]
-		chairResp := ownerGetChairResponseChair{
-			ID:            c.ID,
-			Name:          c.Name,
-			Model:         c.Model,
-			Active:        c.IsActive,
-			RegisteredAt:  c.CreatedAt.UnixMilli(),
-			TotalDistance: 0,
+	for _, chair := range chairs {
+		c := ownerGetChairResponseChair{
+			ID:            chair.ID,
+			Name:          chair.Name,
+			Model:         chair.Model,
+			Active:        chair.IsActive,
+			RegisteredAt:  chair.CreatedAt.UnixMilli(),
+			TotalDistance: chair.TotalDistance,
 		}
-
-		// 距離と更新時刻を付与
-		if info != nil {
-			chairResp.TotalDistance = info.totalDistance
-			if !info.updatedAt.IsZero() {
-				t := info.updatedAt.UnixMilli()
-				chairResp.TotalDistanceUpdatedAt = &t
-			}
+		if chair.TotalDistanceUpdatedAt.Valid {
+			t := chair.TotalDistanceUpdatedAt.Time.UnixMilli()
+			c.TotalDistanceUpdatedAt = &t
 		}
-
-		res.Chairs = append(res.Chairs, chairResp)
+		res.Chairs = append(res.Chairs, c)
 	}
 	writeJSON(w, http.StatusOK, res)
 }
