@@ -404,7 +404,7 @@ func appGetRidesOld(w http.ResponseWriter, r *http.Request) {
 
 	tx, err := db.Beginx()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to begin transaction: %w", err))
 		return
 	}
 	defer tx.Rollback()
@@ -424,7 +424,7 @@ func appGetRidesOld(w http.ResponseWriter, r *http.Request) {
 	for _, ride := range rides {
 		status, err := getLatestRideStatus(ctx, tx, ride.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to get latest ride status: %w", err))
 			return
 		}
 		if status != "COMPLETED" {
@@ -433,7 +433,7 @@ func appGetRidesOld(w http.ResponseWriter, r *http.Request) {
 
 		fare, err := calculateDiscountedFare(ctx, tx, user.ID, &ride, ride.PickupLatitude, ride.PickupLongitude, ride.DestinationLatitude, ride.DestinationLongitude)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to calculate discounted fare: %w", err))
 			return
 		}
 
@@ -451,7 +451,7 @@ func appGetRidesOld(w http.ResponseWriter, r *http.Request) {
 
 		chair := &Chair{}
 		if err := tx.GetContext(ctx, chair, `SELECT * FROM chairs WHERE id = ?`, ride.ChairID); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to get chair: %w", err))
 			return
 		}
 		item.Chair.ID = chair.ID
@@ -460,7 +460,7 @@ func appGetRidesOld(w http.ResponseWriter, r *http.Request) {
 
 		owner := &Owner{}
 		if err := tx.GetContext(ctx, owner, `SELECT * FROM owners WHERE id = ?`, chair.OwnerID); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to get owner: %w", err))
 			return
 		}
 		item.Chair.Owner = owner.Name
