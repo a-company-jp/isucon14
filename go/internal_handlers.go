@@ -32,7 +32,6 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
         SELECT c.*
         FROM chairs c
         JOIN chair_locations cl ON c.id = cl.chair_id
-		JOIN chair_models cm ON c.model = cm.name
         WHERE c.is_active = TRUE
           AND NOT EXISTS (
               SELECT 1
@@ -41,7 +40,7 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
               WHERE r.chair_id = c.id
                 AND rs.status != 'COMPLETED'
           )
-        ORDER BY (ABS(cl.latitude - ?) + ABS(cl.longitude - ?))  / cm.speed ASC
+        ORDER BY ABS(cl.latitude - ?) + ABS(cl.longitude - ?) ASC
         LIMIT 1
     `
 
